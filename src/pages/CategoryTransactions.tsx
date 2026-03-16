@@ -16,6 +16,7 @@ import {
 import { useCompany } from "@/hooks/useCompany";
 import { supabase } from "@/integrations/supabase/client";
 import { formatCurrency } from "@/lib/utils";
+import { dedupeStatementTransactions, getTransactionDateFromMetadataOriginal } from "@/lib/statementTransactionDedup";
 
 type CategoryTransaction = {
   id: string;
@@ -43,21 +44,7 @@ const CategoryTransactions = () => {
   };
 
   const getTransactionDateFromMetadata = (metadata: any): string | null => {
-    if (!metadata) return null;
-
-    let dateStr: string | null = null;
-
-    if (metadata.original_data && metadata.original_data["Transaction Date"]) {
-      dateStr = metadata.original_data["Transaction Date"];
-    } else if (metadata.all_columns && Array.isArray(metadata.all_columns)) {
-      const transactionDateColumn = metadata.all_columns.find(
-        (col: any) => col.header && String(col.header).toLowerCase().includes("transaction date")
-      );
-      if (transactionDateColumn?.value) {
-        dateStr = transactionDateColumn.value;
-      }
-    }
-
+    const dateStr = getTransactionDateFromMetadataOriginal(metadata);
     if (!dateStr) return null;
 
     const parts = String(dateStr).trim().split("-");
@@ -139,7 +126,7 @@ const CategoryTransactions = () => {
           .order("transaction_date", { ascending: false });
 
         if (error) throw error;
-        setTransactions(((data || []) as unknown) as CategoryTransaction[]);
+        setTransactions(dedupeStatementTransactions(((data || []) as unknown) as CategoryTransaction[]));
       } catch (error) {
         console.error("Failed to fetch category transactions:", error);
         setTransactions([]);

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "./useCompany";
+import { dedupeStatementTransactions } from "@/lib/statementTransactionDedup";
 
 export interface CategoryStat {
   categoryName: string;
@@ -32,17 +33,19 @@ export function useCategoryStats() {
       // Fetch all transactions from all statements for this company
       const { data: transactions, error } = await supabase
         .from("bank_statement_transactions")
-        .select("category, debit_amount, credit_amount")
+        .select("category, debit_amount, credit_amount, transaction_date, value_date, description, transaction_type, metadata")
         .in("statement_id", statementIds)
         .not("category", "is", null);
 
       if (error) throw error;
       if (!transactions || transactions.length === 0) return [];
 
+      const dedupedTransactions = dedupeStatementTransactions(transactions as any[]);
+
       // Group by category and calculate totals
       const categoryMap = new Map<string, CategoryStat>();
 
-      transactions.forEach((transaction: any) => {
+      dedupedTransactions.forEach((transaction: any) => {
         const categoryName = transaction.category;
         if (!categoryName) return;
 

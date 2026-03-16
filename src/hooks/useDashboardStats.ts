@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "./useCompany";
+import { dedupeStatementTransactions } from "@/lib/statementTransactionDedup";
 
 interface DashboardStats {
   totalReceipts: number;
@@ -83,7 +84,7 @@ export function useDashboardStats() {
         // Fetch transactions for current month with expense categories
         const { data: currentMonthCategoryTransactions } = await supabase
           .from("bank_statement_transactions" as any)
-          .select("debit_amount, credit_amount, transaction_date")
+          .select("debit_amount, credit_amount, transaction_date, value_date, description, transaction_type, metadata")
           .in("statement_id", statementIds)
           .in("category", expenseCategories)
           .gte("transaction_date", currentMonthStartStr)
@@ -92,7 +93,7 @@ export function useDashboardStats() {
         // Fetch transactions for last month with expense categories
         const { data: lastMonthCategoryTransactions } = await supabase
           .from("bank_statement_transactions" as any)
-          .select("debit_amount, credit_amount, transaction_date")
+          .select("debit_amount, credit_amount, transaction_date, value_date, description, transaction_type, metadata")
           .in("statement_id", statementIds)
           .in("category", expenseCategories)
           .gte("transaction_date", lastMonthStartStr)
@@ -100,12 +101,13 @@ export function useDashboardStats() {
 
         // Calculate totals for current month (net amount = credit - debit)
         if (currentMonthCategoryTransactions) {
-          currentMonthCategoryTransactionCount = currentMonthCategoryTransactions.length;
-          const totalDebit = (currentMonthCategoryTransactions as any[]).reduce(
+          const currentMonthDedupedTransactions = dedupeStatementTransactions(currentMonthCategoryTransactions as any[]);
+          currentMonthCategoryTransactionCount = currentMonthDedupedTransactions.length;
+          const totalDebit = currentMonthDedupedTransactions.reduce(
             (sum, t: any) => sum + (Number(t.debit_amount) || 0),
             0
           );
-          const totalCredit = (currentMonthCategoryTransactions as any[]).reduce(
+          const totalCredit = currentMonthDedupedTransactions.reduce(
             (sum, t: any) => sum + (Number(t.credit_amount) || 0),
             0
           );
@@ -115,12 +117,13 @@ export function useDashboardStats() {
 
         // Calculate totals for last month
         if (lastMonthCategoryTransactions) {
-          lastMonthCategoryTransactionCount = lastMonthCategoryTransactions.length;
-          const totalDebit = (lastMonthCategoryTransactions as any[]).reduce(
+          const lastMonthDedupedTransactions = dedupeStatementTransactions(lastMonthCategoryTransactions as any[]);
+          lastMonthCategoryTransactionCount = lastMonthDedupedTransactions.length;
+          const totalDebit = lastMonthDedupedTransactions.reduce(
             (sum, t: any) => sum + (Number(t.debit_amount) || 0),
             0
           );
-          const totalCredit = (lastMonthCategoryTransactions as any[]).reduce(
+          const totalCredit = lastMonthDedupedTransactions.reduce(
             (sum, t: any) => sum + (Number(t.credit_amount) || 0),
             0
           );

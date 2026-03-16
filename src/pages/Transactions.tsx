@@ -63,8 +63,9 @@ import {
 import { useExpenses } from "@/hooks/useExpenses";
 import { useReceipts } from "@/hooks/useReceipts";
 import { useCategories, useCreateCategory, useDeleteCategory } from "@/hooks/useCategories";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
+import { dedupeStatementTransactions, getTransactionDateFromMetadataOriginal, getValueDateFromMetadataOriginal } from "@/lib/statementTransactionDedup";
 import {
   Select,
   SelectContent,
@@ -75,6 +76,7 @@ import {
 
 const Transactions = () => {
   console.log('🚀 [Transactions] Component rendering');
+  const queryClient = useQueryClient();
   const location = useLocation();
   const navigate = useNavigate();
   const [selectedStatementId, setSelectedStatementId] = useState<string | null>(null);
@@ -92,7 +94,7 @@ const Transactions = () => {
   const [deletingProof, setDeletingProof] = useState(false);
   const { data: statementsRaw, isLoading } = useBankStatements() as unknown as { data?: BankStatement[]; isLoading: boolean };
   const statements = statementsRaw ?? [];
-  const { data: transactionsRaw, isLoading: transactionsLoading } = useBankStatementTransactions(selectedStatementId) as unknown as { data?: BankStatementTransaction[]; isLoading: boolean };
+  const { data: transactionsRaw, isLoading: transactionsLoading } = useBankStatementTransactions(selectedStatementId, { dedupe: true }) as unknown as { data?: BankStatementTransaction[]; isLoading: boolean };
   const transactions = transactionsRaw ?? [];
   const { data: company } = useCompany();
   const { data: allTransactionsRaw, isLoading: allTransactionsLoading } = useQuery({
@@ -107,45 +109,12 @@ const Transactions = () => {
         .in("statement_id", statementIds);
 
       if (error) throw error;
-      return (data || []) as BankStatementTransaction[];
+      return dedupeStatementTransactions((data || []) as BankStatementTransaction[]);
     },
     enabled: !!company?.id && statements.length > 0,
   });
   const allTransactions = allTransactionsRaw ?? [];
-  const interStatementDedupedTransactions = useMemo(() => {
-    if (!allTransactions || allTransactions.length === 0) return [];
-
-    const normalizeText = (value: unknown) =>
-      String(value ?? "")
-        .replace(/[\u200B-\u200D\uFEFF]/g, "")
-        .trim()
-        .replace(/\s+/g, " ")
-        .toLowerCase();
-
-    const normalizeAmount = (value: number | null | undefined) => Number(value || 0).toFixed(2);
-
-    const uniqueTransactions = new Map<string, BankStatementTransaction>();
-
-    allTransactions.forEach((txn: any) => {
-      const metadataTransactionDate = txn?.metadata?.original_data?.["Transaction Date"] || "";
-      const metadataValueDate = txn?.metadata?.original_data?.["Value Date"] || "";
-
-      const dedupeKey = [
-        normalizeText(metadataTransactionDate || txn.transaction_date || ""),
-        normalizeText(metadataValueDate || txn.value_date || ""),
-        normalizeText(txn.description || ""),
-        normalizeAmount(txn.debit_amount),
-        normalizeAmount(txn.credit_amount),
-        normalizeText(txn.transaction_type || ""),
-      ].join("|");
-
-      if (!uniqueTransactions.has(dedupeKey)) {
-        uniqueTransactions.set(dedupeKey, txn as BankStatementTransaction);
-      }
-    });
-
-    return Array.from(uniqueTransactions.values());
-  }, [allTransactions]);
+  const interStatementDedupedTransactions = useMemo(() => dedupeStatementTransactions(allTransactions), [allTransactions]);
 
   const activeTransactions = selectedStatementId ? transactions : interStatementDedupedTransactions;
   const { user, hasRole } = useAuth();
@@ -179,6 +148,7 @@ const Transactions = () => {
   const [filterStartDate, setFilterStartDate] = useState<string>("");
   const [filterEndDate, setFilterEndDate] = useState<string>("");
   const [transactionsViewMode, setTransactionsViewMode] = useState<"all" | "statement">("all");
+  const employeeNameCacheRef = useRef<Set<string> | null>(null);
 
   // Handle file upload for proof
   const handleProofFileUpload = async (transactionId: string, file: File) => {
@@ -325,6 +295,117 @@ const Transactions = () => {
     }).format(amount);
   };
 
+  const normalizeCategoryName = (category: string | null | undefined) =>
+    String(category || "").trim().toLowerCase();
+
+  const extractPayrollEmployeeName = (description: string | null | undefined) => {
+    if (!description) return null;
+
+    const parts = String(description)
+      .split("/")
+      .map((part) => part.trim());
+
+    if (parts.length < 4) return null;
+
+    const rawName = parts[2] || "";
+    const normalizedName = rawName.replace(/\s+/g, " ").trim();
+    return normalizedName || null;
+  };
+
+  const transactionLookupById = useMemo(() => {
+    const lookup = new Map<string, BankStatementTransaction>();
+
+    interStatementDedupedTransactions.forEach((txn) => {
+      lookup.set(txn.id, txn);
+    });
+    transactions.forEach((txn) => {
+      lookup.set(txn.id, txn);
+    });
+
+    return lookup;
+  }, [interStatementDedupedTransactions, transactions]);
+
+  const ensureEmployeeFromPayrollTransaction = useCallback(async (
+    transaction: Pick<BankStatementTransaction, "id" | "description" | "category"> | null | undefined,
+    categoryOverride?: string | null
+  ) => {
+    if (!transaction || !company?.id || isAuditor) return;
+
+    const effectiveCategory = normalizeCategoryName(categoryOverride ?? transaction.category);
+    if (effectiveCategory !== "payroll") return;
+
+    const fullName = extractPayrollEmployeeName(transaction.description);
+    if (!fullName) return;
+
+    if (!employeeNameCacheRef.current) {
+      const { data: existingEmployees, error } = await supabase
+        .from("employees")
+        .select("full_name")
+        .eq("company_id", company.id);
+
+      if (error) {
+        console.warn("Failed to load employee cache from payroll transactions:", error);
+        return;
+      }
+
+      employeeNameCacheRef.current = new Set(
+        (existingEmployees || [])
+          .map((employee) => String(employee.full_name || "").trim().toLowerCase())
+          .filter(Boolean)
+      );
+    }
+
+    const normalizedNameKey = fullName.toLowerCase();
+    if (employeeNameCacheRef.current.has(normalizedNameKey)) return;
+
+    const slug =
+      fullName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ".")
+        .replace(/^\.+|\.+$/g, "")
+        .slice(0, 60) || "employee";
+    const uniqueSuffix =
+      transaction.id.replace(/[^a-z0-9]/gi, "").slice(-8).toLowerCase() ||
+      Date.now().toString().slice(-8);
+    const email = `${slug}.${uniqueSuffix}@payroll-import.local`;
+
+    const { error: insertError } = await supabase.from("employees").insert({
+      company_id: company.id,
+      full_name: fullName,
+      email,
+      department: "Payroll",
+      status: "active",
+    });
+
+    if (insertError) {
+      console.warn("Failed to insert employee from payroll transaction:", insertError);
+      return;
+    }
+
+    employeeNameCacheRef.current.add(normalizedNameKey);
+    queryClient.invalidateQueries({ queryKey: ["employees"] });
+  }, [company?.id, isAuditor, queryClient]);
+
+  useEffect(() => {
+    employeeNameCacheRef.current = null;
+  }, [company?.id]);
+
+  useEffect(() => {
+    if (!company?.id || isAuditor || interStatementDedupedTransactions.length === 0) return;
+
+    const payrollTransactions = interStatementDedupedTransactions.filter(
+      (txn) => normalizeCategoryName(txn.category) === "payroll"
+    );
+
+    if (payrollTransactions.length === 0) return;
+
+    void (async () => {
+      for (const txn of payrollTransactions) {
+        await ensureEmployeeFromPayrollTransaction(txn);
+      }
+    })();
+  }, [company?.id, interStatementDedupedTransactions, isAuditor, ensureEmployeeFromPayrollTransaction]);
+
   // Check if there are any unsaved categories (memoized for stable reference)
   const hasUnsavedCategories = useMemo(() => {
     const result = Object.keys(newCategoryInputs).some(
@@ -377,6 +458,8 @@ const Transactions = () => {
               category: finalCategoryName
             }, {
               onSuccess: () => {
+                const matchingTransaction = transactionLookupById.get(transactionId);
+                void ensureEmployeeFromPayrollTransaction(matchingTransaction, finalCategoryName);
                 // Clear the input state
                 setShowNewCategoryInput(prev => ({
                   ...prev,
@@ -639,50 +722,6 @@ const Transactions = () => {
   };
 
   // Extract transaction date from metadata in its original format (e.g., "14-May-2025")
-  const getTransactionDateFromMetadataOriginal = (metadata: any): string | null => {
-    if (!metadata) return null;
-    
-    let dateStr: string | null = null;
-    
-    // Try to get from original_data first
-    if (metadata.original_data && metadata.original_data["Transaction Date"]) {
-      dateStr = metadata.original_data["Transaction Date"];
-    } else if (metadata.all_columns && Array.isArray(metadata.all_columns)) {
-      // Fallback: try to get from all_columns
-      const transactionDateColumn = metadata.all_columns.find((col: any) => 
-        col.header && col.header.toLowerCase().includes("transaction date")
-      );
-      if (transactionDateColumn && transactionDateColumn.value) {
-        dateStr = transactionDateColumn.value;
-      }
-    }
-    
-    // Return the original date string format (e.g., "14-May-2025")
-    return dateStr || null;
-  };
-
-  // Extract value date from metadata in its original format (e.g., "14-May-2025")
-  const getValueDateFromMetadataOriginal = (metadata: any): string | null => {
-    if (!metadata) return null;
-    
-    let dateStr: string | null = null;
-    
-    // Try to get from original_data first
-    if (metadata.original_data && metadata.original_data["Value Date"]) {
-      dateStr = metadata.original_data["Value Date"];
-    } else if (metadata.all_columns && Array.isArray(metadata.all_columns)) {
-      // Fallback: try to get from all_columns
-      const valueDateColumn = metadata.all_columns.find((col: any) => 
-        col.header && col.header.toLowerCase().includes("value date")
-      );
-      if (valueDateColumn && valueDateColumn.value) {
-        dateStr = valueDateColumn.value;
-      }
-    }
-    
-    // Return the original date string format (e.g., "14-May-2025")
-    return dateStr || null;
-  };
 
   const getDisplayTransactionDate = (txn: any) => {
     return getTransactionDateFromMetadataOriginal(txn.metadata) ||
@@ -1093,7 +1132,7 @@ const Transactions = () => {
 
   // Component to calculate and display period from transactions (same logic as Statement.tsx)
   const StatementPeriod = ({ statementId }: { statementId: string }) => {
-    const { data: statementTransactions } = useBankStatementTransactions(statementId);
+    const { data: statementTransactions } = useBankStatementTransactions(statementId, { dedupe: true });
     
     const period = useMemo(() => {
       if (!statementTransactions || statementTransactions.length === 0) {
@@ -2034,6 +2073,10 @@ const Transactions = () => {
                                                       updateTransaction.mutate({
                                                         transactionId,
                                                         category: finalCategoryName
+                                                      }, {
+                                                        onSuccess: () => {
+                                                          void ensureEmployeeFromPayrollTransaction(matchingTransaction, finalCategoryName);
+                                                        }
                                                       });
                                                       setShowNewCategoryInput(prev => ({
                                                         ...prev,
@@ -2095,6 +2138,10 @@ const Transactions = () => {
                                               updateTransaction.mutate({
                                                 transactionId,
                                                 category: value || null
+                                              }, {
+                                                onSuccess: () => {
+                                                  void ensureEmployeeFromPayrollTransaction(matchingTransaction, value || null);
+                                                }
                                               });
                                             }
                                           }}

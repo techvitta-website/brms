@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCompany } from "@/hooks/useCompany";
 import { usePayslips } from "@/hooks/usePayslips";
 import { useAuth } from "@/contexts/AuthContext";
@@ -15,6 +16,7 @@ import { formatCurrency } from "@/lib/utils";
 import { format } from "date-fns";
 import { ArrowLeft, Download, Eye, Loader2, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { generatePayslipPDF, downloadPDF, Payslip } from "@/components/payroll/PayslipPDF";
 import { PayslipDialog } from "@/components/payroll/PayslipDialog";
@@ -26,6 +28,7 @@ const statusLabel: Record<string, string> = {
 };
 
 const PayrollEmployeeDetails = () => {
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { employeeId } = useParams<{ employeeId: string }>();
   const { data: company } = useCompany();
@@ -78,9 +81,16 @@ const PayrollEmployeeDetails = () => {
   const [isAutoSaving, setIsAutoSaving] = useState(false);
   const [editingComponentId, setEditingComponentId] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
+  const [updatingStatusPayslipId, setUpdatingStatusPayslipId] = useState<string | null>(null);
 
   const employeePayslips = useMemo(() => {
-    return (payslipsData || []).filter((payslip) => payslip.employee_id === employeeId);
+    return (payslipsData || [])
+      .filter((payslip) => payslip.employee_id === employeeId)
+      .sort((a, b) => {
+        const periodDiff = new Date(b.period_start).getTime() - new Date(a.period_start).getTime();
+        if (periodDiff !== 0) return periodDiff;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
   }, [employeeId, payslipsData]);
 
   const latestPayslip = employeePayslips[0];
@@ -124,8 +134,9 @@ const PayrollEmployeeDetails = () => {
     }
     
     const totalAllowances = houseRentMonthly + conveyanceMonthly + medicalMonthly + 
-                           otherBenefitMonthly + specialAllowanceMonthly;
-    const professionalTax = 200.00; // Common for all employees
+                 otherBenefitMonthly + specialAllowanceMonthly;
+    const annualCtcForDeductions = Number(employeeDetailsData?.annual_ctc || salaryDetails.annualCtc || 0);
+    const professionalTax = annualCtcForDeductions > 0 ? 200.00 : 0;
     const netPay = basicMonthly + totalAllowances - professionalTax;
     
     return {
@@ -207,13 +218,45 @@ const PayrollEmployeeDetails = () => {
 
   const canEditSalaryComponents = isAdmin();
 
+  const handleUpdatePayslipStatus = async (payslipId: string, status: "paid" | "pending") => {
+    try {
+      setUpdatingStatusPayslipId(payslipId);
+
+      const { error } = await supabase
+        .from("payslips")
+        .update({ status })
+        .eq("id", payslipId);
+
+      if (error) throw error;
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["payslips"] }),
+        queryClient.invalidateQueries({ queryKey: ["payslip-stats"] }),
+      ]);
+
+      toast({
+        title: "Status updated",
+        description: `Payslip marked as ${statusLabel[status]}.`,
+      });
+    } catch (error: any) {
+      console.error("Failed to update payslip status:", error);
+      toast({
+        title: "Failed to update status",
+        description: error?.message || "Could not update payslip status.",
+        variant: "destructive",
+      });
+    } finally {
+      setUpdatingStatusPayslipId(null);
+    }
+  };
+
   const monthlyCtc = salaryDetails.annualCtc / 12;
   const basicMonthly = monthlyCtc * 0.5;
   const basicAnnual = basicMonthly * 12;
   const houseRentMonthly = basicMonthly * 0.4;
   const houseRentAnnual = houseRentMonthly * 12;
 
-  const professionalTaxMonthly = 200.00;
+  const professionalTaxMonthly = salaryDetails.annualCtc > 0 ? 200.00 : 0;
   const professionalTaxAnnual = professionalTaxMonthly * 12;
 
   const salaryRows = [
@@ -546,8 +589,8 @@ const PayrollEmployeeDetails = () => {
     const otherBenefitMonthly = empDetails?.other_benefit_monthly || salaryDetails.otherBenefit || 0;
     const specialAllowanceMonthly = empDetails?.special_allowance_monthly || salaryDetails.specialAllowance || 0;
 
-    // Professional Tax is common for all employees (₹200.00)
-    const professionalTax = 200.00;
+    const annualCtcForDeductions = Number(empDetails?.total_annual_ctc || empDetails?.annual_ctc || salaryDetails.annualCtc || 0);
+    const professionalTax = annualCtcForDeductions > 0 ? 200.00 : 0;
 
     // Calculate YTD by summing all payslips from the start of the year up to this period
     const payslipYear = periodStart.getFullYear();
@@ -1352,9 +1395,36 @@ const PayrollEmployeeDetails = () => {
                           <TableCell className="text-destructive">-{formatCurrency(calculatedValues.deductions, currency)}</TableCell>
                           <TableCell className="font-semibold">{formatCurrency(calculatedValues.netPay, currency)}</TableCell>
                         <TableCell>
-                          <Badge variant={payslip.status === "paid" ? "success" : "warning"}>
-                            {statusLabel[payslip.status || "pending"]}
-                          </Badge>
+                          {canEditSalaryComponents ? (
+                            <Select
+                              value={(payslip.status || "pending") === "paid" ? "paid" : "pending"}
+                              onValueChange={(value: "paid" | "pending") => {
+                                if (value !== (payslip.status || "pending")) {
+                                  handleUpdatePayslipStatus(payslip.id, value);
+                                }
+                              }}
+                              disabled={updatingStatusPayslipId === payslip.id}
+                            >
+                              <SelectTrigger className="h-8 w-[120px]">
+                                {updatingStatusPayslipId === payslip.id ? (
+                                  <div className="flex items-center gap-2 text-muted-foreground">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    Updating
+                                  </div>
+                                ) : (
+                                  <SelectValue />
+                                )}
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="paid">Paid</SelectItem>
+                                <SelectItem value="pending">Pending</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <Badge variant={payslip.status === "paid" ? "success" : "warning"}>
+                              {statusLabel[payslip.status || "pending"]}
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell>
                           {payslip.pay_date ? format(new Date(payslip.pay_date), "MMM d, yyyy") : "N/A"}

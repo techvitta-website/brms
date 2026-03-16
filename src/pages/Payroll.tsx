@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,6 @@ import {
   Printer,
   CheckCircle,
   Clock,
-  DollarSign,
   Loader2,
 } from "lucide-react";
 import { PayslipDialog } from "@/components/payroll/PayslipDialog";
@@ -44,6 +43,8 @@ import { generatePayslipPDF, downloadPDF, Payslip } from "@/components/payroll/P
 import { useToast } from "@/hooks/use-toast";
 import { useCompany } from "@/hooks/useCompany";
 import { usePayslips, usePayslipStats } from "@/hooks/usePayslips";
+import { useEmployees } from "@/hooks/useEmployees";
+import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { formatCurrency } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
@@ -52,12 +53,14 @@ import { supabase } from "@/integrations/supabase/client";
 interface PayslipDisplay {
   id: string;
   employeeId: string;
+  periodTimestamp: number;
   employee: {
     name: string;
     position: string;
     email?: string;
     avatar: string;
   };
+  employeeStatus: string;
   period: string;
   basicSalary: number;
   allowances: number;
@@ -65,6 +68,19 @@ interface PayslipDisplay {
   netPay: number;
   status: "paid" | "pending" | "processing";
   payDate: string;
+}
+
+interface EmployeeDetailsRow {
+  employee_id: string;
+  annual_ctc: number | null;
+  total_annual_ctc: number | null;
+  basic_monthly: number | null;
+  house_rent_allowance_monthly: number | null;
+  conveyance_allowance_monthly: number | null;
+  medical_reimbursement_monthly: number | null;
+  other_benefit_monthly: number | null;
+  special_allowance_monthly: number | null;
+  custom_salary_components: Array<{ id?: string; label?: string; monthly?: number | string }> | null;
 }
 
 const statusConfig = {
@@ -96,8 +112,49 @@ const Payroll = () => {
   const { toast } = useToast();
   const { data: company } = useCompany();
   const { data: payslipsData, isLoading } = usePayslips();
+  const { data: employeesData } = useEmployees();
   const { data: stats } = usePayslipStats();
   const currency = company?.currency || "INR";
+
+  const employeeIds = useMemo(() => {
+    const ids = new Set<string>();
+
+    (employeesData || []).forEach((employee) => {
+      if (employee.id) ids.add(employee.id);
+    });
+    (payslipsData || []).forEach((payslip) => {
+      if (payslip.employee_id) ids.add(payslip.employee_id);
+    });
+
+    return Array.from(ids);
+  }, [employeesData, payslipsData]);
+
+  const { data: employeeDetailsRows } = useQuery({
+    queryKey: ["employee-details-for-payroll", company?.id, employeeIds.join(",")],
+    queryFn: async () => {
+      if (!company?.id || employeeIds.length === 0) return [] as EmployeeDetailsRow[];
+
+      const { data, error } = await (supabase as any)
+        .from("employee_details")
+        .select(`
+          employee_id,
+          annual_ctc,
+          total_annual_ctc,
+          basic_monthly,
+          house_rent_allowance_monthly,
+          conveyance_allowance_monthly,
+          medical_reimbursement_monthly,
+          other_benefit_monthly,
+          special_allowance_monthly,
+          custom_salary_components
+        `)
+        .in("employee_id", employeeIds);
+
+      if (error) throw error;
+      return (data || []) as EmployeeDetailsRow[];
+    },
+    enabled: !!company?.id && employeeIds.length > 0,
+  });
 
   // Convert PayslipDisplay to Payslip format
   const convertToPayslip = async (payslipDisplay: PayslipDisplay, payslipData: any): Promise<Payslip> => {
@@ -156,8 +213,9 @@ const Payroll = () => {
     const otherBenefitMonthly = employeeDetails?.other_benefit_monthly || (totalAllowances * 0.25);
     const specialAllowanceMonthly = employeeDetails?.special_allowance_monthly || (totalAllowances * 0.4);
 
-    // Professional Tax is common for all employees (₹200.00)
-    const professionalTax = 200.00;
+    // Professional Tax is zero when annual CTC is zero.
+    const annualCtc = Number(employeeDetails?.total_annual_ctc || employeeDetails?.annual_ctc || 0);
+    const professionalTax = annualCtc > 0 ? 200.00 : 0;
 
     // Calculate YTD by counting payslips from start of year
     const payslipYear = periodStart.getFullYear();
@@ -251,34 +309,199 @@ const Payroll = () => {
     };
   };
 
-  // Transform database payslips to display format
-  const payslips: PayslipDisplay[] = (payslipsData || []).map((payslip) => {
+  const employeeDetailsByEmployeeId = useMemo(() => {
+    const map = new Map<string, EmployeeDetailsRow>();
+    (employeeDetailsRows || []).forEach((row) => {
+      if (row?.employee_id) {
+        map.set(row.employee_id, row);
+      }
+    });
+    return map;
+  }, [employeeDetailsRows]);
+
+  const employeeStatusByEmployeeId = useMemo(() => {
+    const map = new Map<string, string>();
+    (employeesData || []).forEach((employee) => {
+      if (employee.id) {
+        map.set(employee.id, employee.status || "N/A");
+      }
+    });
+    return map;
+  }, [employeesData]);
+
+  const getEmployeeSalaryTableValues = (
+    employeeId: string,
+    fallback: {
+      basicSalary: number;
+      allowances: number;
+      deductions: number;
+      netPay: number;
+    }
+  ) => {
+    const details = employeeDetailsByEmployeeId.get(employeeId);
+
+    if (!details) {
+      return {
+        basicSalary: Number(fallback.basicSalary || 0),
+        allowances: Number(fallback.allowances || 0),
+        deductions: Number(fallback.deductions || 0),
+        netPay: Number(fallback.netPay || 0),
+      };
+    }
+
+    const basicMonthly = Number(details.basic_monthly || 0);
+    const houseRentMonthly = Number(details.house_rent_allowance_monthly || 0);
+    const conveyanceMonthly = Number(details.conveyance_allowance_monthly || 0);
+    const medicalMonthly = Number(details.medical_reimbursement_monthly || 0);
+    const otherBenefitMonthly = Number(details.other_benefit_monthly || 0);
+    const specialAllowanceMonthly = Number(details.special_allowance_monthly || 0);
+
+    const customComponents = Array.isArray(details.custom_salary_components)
+      ? details.custom_salary_components
+      : [];
+
+    const customComponentTotals = customComponents.reduce(
+      (totals, component) => {
+        const monthly = Number((component as any)?.monthly || 0);
+        if (monthly >= 0) {
+          totals.earnings += monthly;
+        } else {
+          totals.deductions += Math.abs(monthly);
+        }
+        return totals;
+      },
+      { earnings: 0, deductions: 0 }
+    );
+
+    const annualCtc = Number(details.total_annual_ctc || details.annual_ctc || 0);
+    const isZeroAnnualCtc = annualCtc <= 0;
+    const professionalTax = isZeroAnnualCtc ? 0 : 200;
+
+    const allowances =
+      houseRentMonthly +
+      conveyanceMonthly +
+      medicalMonthly +
+      otherBenefitMonthly +
+      specialAllowanceMonthly +
+      customComponentTotals.earnings;
+    const deductions = isZeroAnnualCtc ? 0 : professionalTax + customComponentTotals.deductions;
+    const netPay = basicMonthly + allowances - deductions;
+
+    return {
+      basicSalary: basicMonthly,
+      allowances,
+      deductions,
+      netPay,
+    };
+  };
+
+  const getPayDateFromPeriodStart = (periodStart: Date) => {
+    const payDate = new Date(periodStart.getFullYear(), periodStart.getMonth() + 1, 3);
+    return format(payDate, "MMM d, yyyy");
+  };
+
+  // Transform database payslips to display format (one latest row per employee)
+  const latestPayslipByEmployee = new Map<string, (typeof payslipsData extends Array<infer T> ? T : never)>();
+  (payslipsData || []).forEach((payslip) => {
+    const existing = latestPayslipByEmployee.get(payslip.employee_id);
+    if (!existing) {
+      latestPayslipByEmployee.set(payslip.employee_id, payslip);
+      return;
+    }
+
+    const existingPeriod = new Date(existing.period_start).getTime();
+    const currentPeriod = new Date(payslip.period_start).getTime();
+    const existingCreated = new Date(existing.created_at).getTime();
+    const currentCreated = new Date(payslip.created_at).getTime();
+
+    if (currentPeriod > existingPeriod || (currentPeriod === existingPeriod && currentCreated > existingCreated)) {
+      latestPayslipByEmployee.set(payslip.employee_id, payslip);
+    }
+  });
+
+  const payslipRows: PayslipDisplay[] = Array.from(latestPayslipByEmployee.values()).map((payslip) => {
     const employee = payslip.employees;
     const periodStart = new Date(payslip.period_start);
-    const periodEnd = new Date(payslip.period_end);
     const period = format(periodStart, "MMMM yyyy");
-    
+    const tableValues = getEmployeeSalaryTableValues(payslip.employee_id, {
+      basicSalary: Number(payslip.basic_salary || 0),
+      allowances: Number(payslip.allowances || 0),
+      deductions: Number(payslip.deductions || 0),
+      netPay: Number(payslip.net_pay || 0),
+    });
+
     return {
       id: payslip.id,
       employeeId: payslip.employee_id,
+      periodTimestamp: periodStart.getTime(),
       employee: {
         name: employee?.full_name || "Unknown Employee",
         position: employee?.position || "N/A",
         email: employee?.email || undefined,
         avatar: employee?.email || employee?.full_name || "employee",
       },
+      employeeStatus: employeeStatusByEmployeeId.get(payslip.employee_id) || "N/A",
       period,
-      basicSalary: Number(payslip.basic_salary),
-      allowances: Number(payslip.allowances || 0),
-      deductions: Number(payslip.deductions || 0),
-      netPay: Number(payslip.net_pay),
+      basicSalary: tableValues.basicSalary,
+      allowances: tableValues.allowances,
+      deductions: tableValues.deductions,
+      netPay: tableValues.netPay,
       status: (payslip.status as "paid" | "pending" | "processing") || "pending",
-      payDate: payslip.pay_date ? format(new Date(payslip.pay_date), "MMM d, yyyy") : "N/A",
+      payDate: getPayDateFromPeriodStart(periodStart),
     };
   });
 
+  // Get current period for display (most recent payslip period or current month)
+  const currentPeriodTimestamp = payslipRows.length > 0
+    ? Math.max(...payslipRows.map((row) => row.periodTimestamp))
+    : new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+  const currentPeriod = format(new Date(currentPeriodTimestamp), "MMMM yyyy");
+
+  const payrollRows: PayslipDisplay[] = useMemo(() => {
+    const existingEmployeeIds = new Set(payslipRows.map((row) => row.employeeId));
+    const employeeOnlyRows: PayslipDisplay[] = (employeesData || [])
+      .filter((employee) => employee.id && !existingEmployeeIds.has(employee.id))
+      .map((employee) => {
+        const fallbackSalary = Number(employee.salary || 0);
+        const tableValues = getEmployeeSalaryTableValues(employee.id, {
+          basicSalary: fallbackSalary,
+          allowances: 0,
+          deductions: 0,
+          netPay: fallbackSalary,
+        });
+
+        return {
+          id: `employee-${employee.id}`,
+          employeeId: employee.id,
+          periodTimestamp: currentPeriodTimestamp,
+          employee: {
+            name: employee.full_name || "Unknown Employee",
+            position: employee.position || "N/A",
+            email: employee.email || undefined,
+            avatar: employee.email || employee.full_name || "employee",
+          },
+          employeeStatus: employee.status || "N/A",
+          period: currentPeriod,
+          basicSalary: tableValues.basicSalary,
+          allowances: tableValues.allowances,
+          deductions: tableValues.deductions,
+          netPay: tableValues.netPay,
+          status: "pending",
+          payDate: "N/A",
+        };
+      });
+
+    const rows = [...payslipRows, ...employeeOnlyRows];
+
+    rows.sort((a, b) => {
+      return b.periodTimestamp - a.periodTimestamp;
+    });
+
+    return rows;
+  }, [payslipRows, employeesData, currentPeriod, currentPeriodTimestamp, employeeDetailsByEmployeeId]);
+
   // Filter payslips based on search query and status filter
-  const filteredPayslips = payslips.filter((payslip) => {
+  const filteredPayslips = payrollRows.filter((payslip) => {
     const matchesSearch =
       !searchQuery ||
       payslip.employee.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -294,11 +517,6 @@ const Payroll = () => {
   const totalPayroll = stats?.totalPayroll || 0;
   const paidAmount = stats?.paidAmount || 0;
   const pendingAmount = stats?.pendingAmount || 0;
-
-  // Get current period for display (most recent payslip period or current month)
-  const currentPeriod = payslips.length > 0 
-    ? payslips[0].period 
-    : format(new Date(), "MMMM yyyy");
 
   const handleViewPayslip = async (payslipDisplay: PayslipDisplay) => {
     const payslipData = payslipsData?.find(p => p.id === payslipDisplay.id);
@@ -431,17 +649,13 @@ const Payroll = () => {
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Payroll</h1>
             <p className="text-muted-foreground">
-              Process payroll and manage employee payslips
+              Payroll auto-generates on the 3rd for previous month and manages employee payslips
             </p>
           </div>
           <div className="flex gap-3">
             <Button variant="outline">
               <Calendar className="mr-2 h-4 w-4" />
               {currentPeriod}
-            </Button>
-            <Button>
-              <DollarSign className="mr-2 h-4 w-4" />
-              Process Payroll
             </Button>
           </div>
         </div>
@@ -469,7 +683,7 @@ const Payroll = () => {
         </Card>
         <Card variant="stat" className="p-4">
           <p className="text-sm text-muted-foreground">Employees</p>
-          <p className="text-2xl font-bold">{stats?.totalEmployees || payslips.length}</p>
+          <p className="text-2xl font-bold">{Math.max(stats?.totalEmployees || 0, payrollRows.length)}</p>
         </Card>
       </div>
 
@@ -507,12 +721,11 @@ const Payroll = () => {
             <TableHeader>
               <TableRow>
                 <TableHead>Employee</TableHead>
-                <TableHead>Period</TableHead>
+                <TableHead>Employee Status</TableHead>
                 <TableHead>Basic Salary</TableHead>
                 <TableHead>Allowances</TableHead>
                 <TableHead>Deductions</TableHead>
                 <TableHead>Net Pay</TableHead>
-                <TableHead>Pay Date</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="w-12"></TableHead>
               </TableRow>
@@ -520,18 +733,19 @@ const Payroll = () => {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                     Loading payslips...
                   </TableCell>
                 </TableRow>
               ) : filteredPayslips.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                    No payslips found
+                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                    No payroll records found
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredPayslips.map((payslip) => {
+                const hasPayslipRecord = !!payslipsData?.some((record) => record.id === payslip.id);
                 const status = statusConfig[payslip.status];
                 const StatusIcon = status.icon;
                 return (
@@ -558,7 +772,9 @@ const Payroll = () => {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell>{payslip.period}</TableCell>
+                    <TableCell>
+                      {payslip.employeeStatus}
+                    </TableCell>
                     <TableCell>
                       {formatCurrency(payslip.basicSalary, currency)}
                     </TableCell>
@@ -570,9 +786,6 @@ const Payroll = () => {
                     </TableCell>
                     <TableCell className="font-semibold">
                       {formatCurrency(payslip.netPay, currency)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {payslip.payDate}
                     </TableCell>
                     <TableCell>
                       <Badge variant={status.variant} className="gap-1">
@@ -595,7 +808,7 @@ const Payroll = () => {
                           <DropdownMenuItem onClick={(event) => {
                             event.stopPropagation();
                             handleViewPayslip(payslip);
-                          }}>
+                          }} disabled={!hasPayslipRecord}>
                             <Eye className="mr-2 h-4 w-4" />
                             View Payslip
                           </DropdownMenuItem>
@@ -604,7 +817,7 @@ const Payroll = () => {
                               event.stopPropagation();
                               handleDownloadPDF(payslip);
                             }}
-                            disabled={downloadingId === payslip.id}
+                            disabled={!hasPayslipRecord || downloadingId === payslip.id}
                           >
                             {downloadingId === payslip.id ? (
                               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -618,7 +831,7 @@ const Payroll = () => {
                               event.stopPropagation();
                               handlePrint(payslip);
                             }}
-                            disabled={printingId === payslip.id}
+                            disabled={!hasPayslipRecord || printingId === payslip.id}
                           >
                             {printingId === payslip.id ? (
                               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

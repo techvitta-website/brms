@@ -17,62 +17,17 @@ import { ArrowLeft } from "lucide-react";
 import { format } from "date-fns";
 import { useBankStatements, useBankStatementTransactions } from "@/hooks/useStatements";
 import { useCompany } from "@/hooks/useCompany";
+import { getTransactionDateFromMetadataOriginal, getValueDateFromMetadataOriginal } from "@/lib/statementTransactionDedup";
 
 const StatementTransactions = () => {
   const { statementId } = useParams<{ statementId: string }>();
   const navigate = useNavigate();
   const { data: statements } = useBankStatements();
-  const { data: transactions, isLoading: transactionsLoading } = useBankStatementTransactions(statementId || null);
+  const { data: transactions, isLoading: transactionsLoading } = useBankStatementTransactions(statementId || null, { dedupe: true });
   const { data: company } = useCompany();
 
   // Find the selected statement
   const selectedStatement = statements?.find((s: any) => s.id === statementId);
-
-  // Extract transaction date from metadata in its original format (e.g., "14-May-2025")
-  const getTransactionDateFromMetadataOriginal = (metadata: any): string | null => {
-    if (!metadata) return null;
-    
-    let dateStr: string | null = null;
-    
-    // Try to get from original_data first
-    if (metadata.original_data && metadata.original_data["Transaction Date"]) {
-      dateStr = metadata.original_data["Transaction Date"];
-    } else if (metadata.all_columns && Array.isArray(metadata.all_columns)) {
-      // Fallback: try to get from all_columns
-      const transactionDateColumn = metadata.all_columns.find((col: any) => 
-        col.header && col.header.toLowerCase().includes("transaction date")
-      );
-      if (transactionDateColumn && transactionDateColumn.value) {
-        dateStr = transactionDateColumn.value;
-      }
-    }
-    
-    // Return the original date string format (e.g., "14-May-2025")
-    return dateStr || null;
-  };
-
-  // Extract value date from metadata in its original format (e.g., "14-May-2025")
-  const getValueDateFromMetadataOriginal = (metadata: any): string | null => {
-    if (!metadata) return null;
-    
-    let dateStr: string | null = null;
-    
-    // Try to get from original_data first
-    if (metadata.original_data && metadata.original_data["Value Date"]) {
-      dateStr = metadata.original_data["Value Date"];
-    } else if (metadata.all_columns && Array.isArray(metadata.all_columns)) {
-      // Fallback: try to get from all_columns
-      const valueDateColumn = metadata.all_columns.find((col: any) => 
-        col.header && col.header.toLowerCase().includes("value date")
-      );
-      if (valueDateColumn && valueDateColumn.value) {
-        dateStr = valueDateColumn.value;
-      }
-    }
-    
-    // Return the original date string format (e.g., "14-May-2025")
-    return dateStr || null;
-  };
 
   // Sort transactions by metadata.transaction_date in descending order (newest first)
   const sortedTransactions = useMemo(() => {

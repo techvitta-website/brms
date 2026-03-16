@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Tables, TablesInsert } from "@/integrations/supabase/types";
 import { toast } from "@/hooks/use-toast";
 import { useCompany } from "./useCompany";
+import { dedupeStatementTransactions } from "@/lib/statementTransactionDedup";
 
 export type BankStatement = Tables<"bank_statements">;
 export type BankStatementInsert = TablesInsert<"bank_statements">;
@@ -30,9 +31,9 @@ export function useBankStatements() {
   });
 }
 
-export function useBankStatementTransactions(statementId: string | undefined) {
+export function useBankStatementTransactions(statementId: string | undefined, options?: { dedupe?: boolean }) {
   return useQuery({
-    queryKey: ["bank-statement-transactions", statementId],
+    queryKey: ["bank-statement-transactions", statementId, options?.dedupe ? "deduped" : "raw"],
     queryFn: async () => {
       if (!statementId) return [];
 
@@ -43,7 +44,8 @@ export function useBankStatementTransactions(statementId: string | undefined) {
         .eq("statement_id", statementId);
 
       if (error) throw error;
-      return data as BankStatementTransaction[];
+      const transactions = data as BankStatementTransaction[];
+      return options?.dedupe ? dedupeStatementTransactions(transactions) : transactions;
     },
     enabled: !!statementId,
   });

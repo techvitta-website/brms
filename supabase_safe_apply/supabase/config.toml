@@ -1,0 +1,28 @@
+project_id = "ipsvtrxeadkvcecgxwmy"
+
+[functions.extract-receipt-data]
+verify_jwt = true
+
+[functions.send-receipt-notification]
+verify_jwt = true
+
+[functions.send-invoice-email]
+verify_jwt = true
+
+[functions.send-payment-reminder]
+verify_jwt = false
+
+[functions.send-policy-violation-notification]
+verify_jwt = true
+
+[functions.send-expense-notification]
+verify_jwt = true
+
+[functions.send-anomaly-alert]
+verify_jwt = true
+
+[functions.scheduled-anomaly-scan]
+verify_jwt = false
+
+[functions.reset-user-password]
+verify_jwt = true

@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { useCompany } from "./useCompany";
+import { dedupeStatementTransactions, getTransactionDateFromMetadataOriginal } from "@/lib/statementTransactionDedup";
 
 interface StatementExpenseData {
   category: string;
@@ -53,40 +54,7 @@ export function useStatementTransactionsForExpenses() {
           return targetCategories.includes(normalized);
         });
 
-        // Deduplicate by transaction ID (the most important dedup)
-        const seenIds = new Map<string, any>();
-        const deduplicatedById = filteredTransactions.filter((t: any) => {
-          if (seenIds.has(t.id)) {
-            return false;
-          }
-          seenIds.set(t.id, t);
-          return true;
-        });
-
-        // Then deduplicate by transaction data itself (amount, date, category, description)
-        const seenTransactions = new Map<string, any>();
-        const deduplicatedByData = deduplicatedById.filter((t: any) => {
-          const amount = Math.abs(t.debit_amount || t.credit_amount || 0);
-          const key = `${amount}|${t.transaction_date}|${t.category}|${t.description}`;
-          if (seenTransactions.has(key)) {
-            return false; // Skip duplicate
-          }
-          seenTransactions.set(key, t);
-          return true;
-        });
-
-        // Create a final deduplicated list using ONLY the exact data that matters for display
-        // This is our last line of defense against any duplicates
-        const finalDedupMap = new Map<string, any>();
-        for (const t of deduplicatedByData) {
-          const amount = Math.abs(t.debit_amount || t.credit_amount || 0);
-          const finalKey = `${amount}|${t.transaction_date}|${t.category}|${t.description}`;
-          // Keep only the first occurrence of each unique data combination
-          if (!finalDedupMap.has(finalKey)) {
-            finalDedupMap.set(finalKey, t);
-          }
-        }
-        const finalDeduped = Array.from(finalDedupMap.values());
+        const finalDeduped = dedupeStatementTransactions(filteredTransactions as any[]);
 
         // Deduplicate: filter out transactions that already have an expense
         const transactionIds = finalDeduped.map((t: any) => t.id);
@@ -112,12 +80,7 @@ export function useStatementTransactionsForExpenses() {
         const unimportedTransactions = finalDeduped.filter((t: any) => !importedIds.has(t.id));
 
         const getDateFromMetadata = (metadata: any): string | null => {
-          if (!metadata) return null;
-          const fromOriginal = metadata?.original_data?.["Transaction Date"];
-          const fromColumns = Array.isArray(metadata?.all_columns)
-            ? metadata.all_columns.find((col: any) => col?.header && String(col.header).toLowerCase().includes("transaction date"))?.value
-            : null;
-          const rawDate = fromOriginal || fromColumns;
+          const rawDate = getTransactionDateFromMetadataOriginal(metadata);
           if (!rawDate) return null;
 
           const value = String(rawDate).trim();

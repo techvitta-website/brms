@@ -54,6 +54,16 @@ const Viewstatement: React.FC = () => {
     return ['xlsx', 'xls', 'csv'].includes(ext);
   };
 
+  const isUnsafeLocalhostUrl = (url: string) => {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      const localhostHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+      return localhostHosts.has(parsed.hostname) && parsed.origin !== window.location.origin;
+    } catch {
+      return false;
+    }
+  };
+
   const formatCurrency = (amount: number | null, currency: string = 'INR') => {
     if (amount === null || amount === undefined) return '—';
     return new Intl.NumberFormat('en-IN', {
@@ -497,11 +507,19 @@ const Viewstatement: React.FC = () => {
                 )
               ) : (
                 // PDF/Image view
-                <iframe
-                  src={statement?.file_url}
-                  className="w-full h-full"
-                  title={statement?.file_name}
-                />
+                statement?.file_url && isUnsafeLocalhostUrl(statement.file_url) ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground p-6 text-center">
+                    <AlertCircle className="h-12 w-12 text-yellow-600" />
+                    <p>Blocked unsafe localhost URL for preview.</p>
+                    <p className="text-sm">Use a valid Supabase storage URL or open the app on the same localhost origin.</p>
+                  </div>
+                ) : (
+                  <iframe
+                    src={statement?.file_url}
+                    className="w-full h-full"
+                    title={statement?.file_name}
+                  />
+                )
               )}
             </div>
           </div>
