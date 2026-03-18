@@ -99,6 +99,16 @@ const Dashboard = () => {
               />
             </div>
             <div className="animate-slide-up opacity-0 stagger-3">
+              <StatCard
+                title="Total External Expenses"
+                value={formatCurrency(stats?.totalExternalExpenses || 0, currency)}
+                change="All external expense entries"
+                changeType="neutral"
+                icon={CreditCard}
+                iconColor="bg-warning/10 text-warning"
+              />
+            </div>
+            <div className="animate-slide-up opacity-0 stagger-4">
               { (categoryStatsLoading || invoiceStatsLoading || isLoading) ? (
                 <Skeleton className="h-32 w-full" />
               ) : (
@@ -112,7 +122,7 @@ const Dashboard = () => {
                 />
               )}
             </div>
-            <div className="animate-slide-up opacity-0 stagger-3">
+            <div className="animate-slide-up opacity-0 stagger-4">
               <StatCard
                 title="Pending Invoices"
                 value={formatCurrency(stats?.pendingInvoices || 0, currency)}

@@ -7,6 +7,7 @@ interface DashboardStats {
   totalReceipts: number;
   receiptsChange: number;
   totalExpenses: number;
+  totalExternalExpenses: number;
   expensesChange: number;
   expensesNetAmount: number; // Net amount (credit - debit) for expense categories
   expensesTransactionCount: number; // Transaction count for expense categories
@@ -29,6 +30,7 @@ export function useDashboardStats() {
           totalReceipts: 0,
           receiptsChange: 0,
           totalExpenses: 0,
+          totalExternalExpenses: 0,
           expensesChange: 0,
           expensesNetAmount: 0,
           expensesTransactionCount: 0,
@@ -158,6 +160,12 @@ export function useDashboardStats() {
         .select("total")
         .in("status", ["pending", "sent"]);
 
+      // Fetch all external expenses for company (all-time total)
+      const { data: externalExpenses } = await (supabase as any)
+        .from("external_expenses")
+        .select("amount")
+        .eq("company_id", company.id);
+
       // Fetch overdue invoices
       const today = now.toISOString().split("T")[0];
       const { data: overdueInvoices } = await supabase
@@ -183,6 +191,10 @@ export function useDashboardStats() {
 
       const pendingTotal = pendingInvoices?.reduce((sum, i) => sum + Number(i.total), 0) || 0;
       const overdueTotal = overdueInvoices?.reduce((sum, i) => sum + Number(i.total), 0) || 0;
+      const totalExternalExpenses = (externalExpenses || []).reduce(
+        (sum: number, exp: any) => sum + Number(exp.amount || 0),
+        0
+      );
 
       // Calculate invoice income for current month
       // Only count PAID invoices as income (money actually received)
@@ -222,6 +234,7 @@ export function useDashboardStats() {
         totalReceipts,
         receiptsChange,
         totalExpenses,
+        totalExternalExpenses,
         expensesChange,
         expensesNetAmount: currentMonthCategoryExpensesNet,
         expensesTransactionCount: currentMonthCategoryTransactionCount,

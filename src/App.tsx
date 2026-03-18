@@ -11,6 +11,7 @@ import Dashboard from "./pages/Dashboard";
 import Receipts from "./pages/Receipts";
 import Invoices from "./pages/Invoices";
 import Expenses from "./pages/Expenses";
+import ExternalExpenses from "./pages/ExternalExpenses";
 import Employees from "./pages/Employees";
 import Payroll from "./pages/Payroll";
 import PayrollEmployeeDetails from "./pages/PayrollEmployeeDetails";
@@ -84,6 +85,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Expenses />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/external-expenses"
+              element={
+                <ProtectedRoute>
+                  <ExternalExpenses />
                 </ProtectedRoute>
               }
             />

@@ -57,6 +57,7 @@ const navItems: NavItem[] = [
   { label: "Receipts", href: "/receipts", icon: Receipt },
   { label: "Invoices", href: "/invoices", icon: FileText, requiredRoles: ["super_admin", "admin", "finance_manager", "accountant"] },
   { label: "Expenses", href: "/expenses", icon: CreditCard },
+  { label: "External Expenses", href: "/external-expenses", icon: CreditCard },
   { label: "Payroll", href: "/payroll", icon: Wallet, requiredRoles: ["super_admin", "admin", "finance_manager", "hr"] },
   { label: "Statement", href: "/statement", icon: FileSpreadsheet, requiredRoles: ["super_admin", "admin", "finance_manager", "accountant"] },
   { label: "Transactions", href: "/transactions", icon: ListChecks, requiredRoles: ["super_admin", "admin", "finance_manager", "accountant", "auditor"] },

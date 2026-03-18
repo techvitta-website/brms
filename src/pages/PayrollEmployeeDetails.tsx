@@ -82,6 +82,16 @@ const PayrollEmployeeDetails = () => {
   const [editingComponentId, setEditingComponentId] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [updatingStatusPayslipId, setUpdatingStatusPayslipId] = useState<string | null>(null);
+  const [showPanData, setShowPanData] = useState(false);
+  const [showAccountNumberData, setShowAccountNumberData] = useState(false);
+  const [showIfscData, setShowIfscData] = useState(false);
+
+  const getMaskedValue = (value: string) => {
+    if (!value) return "";
+    const visiblePart = value.slice(-4);
+    const maskedPart = "X".repeat(Math.max(value.length - 4, 0));
+    return `${maskedPart}${visiblePart}`;
+  };
 
   const employeePayslips = useMemo(() => {
     return (payslipsData || [])
@@ -919,13 +929,24 @@ const PayrollEmployeeDetails = () => {
               </div>
               <div>
                 <Label htmlFor="personal-pan">PAN</Label>
-                <Input
-                  id="personal-pan"
-                  value={personalInformation.pan}
-                  onChange={(event) =>
-                    setPersonalInformation((prev) => ({ ...prev, pan: event.target.value }))
-                  }
-                />
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="personal-pan"
+                    className="flex-1"
+                    value={showPanData ? personalInformation.pan : getMaskedValue(personalInformation.pan)}
+                    readOnly={!showPanData}
+                    onChange={(event) =>
+                      setPersonalInformation((prev) => ({ ...prev, pan: event.target.value }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="shrink-0 text-sm font-medium text-blue-600 hover:text-blue-700 underline"
+                    onClick={() => setShowPanData((prev) => !prev)}
+                  >
+                    {showPanData ? "Hide Full Data" : "Show Full Data"}
+                  </button>
+                </div>
               </div>
               <div>
                 <Label htmlFor="personal-email-address">Email Address</Label>
@@ -983,13 +1004,24 @@ const PayrollEmployeeDetails = () => {
               </div>
               <div>
                 <Label htmlFor="payment-account-number">Account Number</Label>
-                <Input
-                  id="payment-account-number"
-                  value={paymentInformation.accountNumber}
-                  onChange={(event) =>
-                    setPaymentInformation((prev) => ({ ...prev, accountNumber: event.target.value }))
-                  }
-                />
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="payment-account-number"
+                    className="flex-1"
+                    value={showAccountNumberData ? paymentInformation.accountNumber : getMaskedValue(paymentInformation.accountNumber)}
+                    readOnly={!showAccountNumberData}
+                    onChange={(event) =>
+                      setPaymentInformation((prev) => ({ ...prev, accountNumber: event.target.value }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="shrink-0 text-sm font-medium text-blue-600 hover:text-blue-700 underline"
+                    onClick={() => setShowAccountNumberData((prev) => !prev)}
+                  >
+                    {showAccountNumberData ? "Hide Full Data" : "Show Full Data"}
+                  </button>
+                </div>
               </div>
               <div>
                 <Label htmlFor="payment-account-holder-name">Account Holder Name</Label>
@@ -1013,13 +1045,24 @@ const PayrollEmployeeDetails = () => {
               </div>
               <div>
                 <Label htmlFor="payment-ifsc">IFSC</Label>
-                <Input
-                  id="payment-ifsc"
-                  value={paymentInformation.ifsc}
-                  onChange={(event) =>
-                    setPaymentInformation((prev) => ({ ...prev, ifsc: event.target.value }))
-                  }
-                />
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="payment-ifsc"
+                    className="flex-1"
+                    value={showIfscData ? paymentInformation.ifsc : getMaskedValue(paymentInformation.ifsc)}
+                    readOnly={!showIfscData}
+                    onChange={(event) =>
+                      setPaymentInformation((prev) => ({ ...prev, ifsc: event.target.value }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="shrink-0 text-sm font-medium text-blue-600 hover:text-blue-700 underline"
+                    onClick={() => setShowIfscData((prev) => !prev)}
+                  >
+                    {showIfscData ? "Hide Full Data" : "Show Full Data"}
+                  </button>
+                </div>
               </div>
               <div>
                 <Label htmlFor="payment-account-type">Account Type</Label>
