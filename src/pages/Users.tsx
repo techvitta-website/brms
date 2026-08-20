@@ -253,13 +253,14 @@ const Users = () => {
 
     setIsResetting(true);
     try {
-      // Hash the password before storing. Uses PBKDF2 with SHA-256.
-      const hashed = await hashPassword(newPassword);
+      // Change the real Supabase Auth password via the secure admin edge function.
+      // (The old code wrote a hash into employees.password, which never affected login.)
+      const { data, error } = await supabase.functions.invoke("admin-reset-password", {
+        body: { targetUserId: resetTargetUser.id, newPassword },
+      });
 
-      const { error } = await supabase
-        .from("employees" as any)
-        .update({ password: hashed } as any)
-        .eq("user_id", resetTargetUser.id);
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
 
       if (error) throw error;
 
