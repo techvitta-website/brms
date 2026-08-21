@@ -12,6 +12,14 @@ dist
 dist-ssr
 *.local
 
+# Environment files. Keep .env.example tracked as the documented template.
+.env
+.env.*
+!.env.example
+
+# Supabase CLI scratch state
+supabase/.temp/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
