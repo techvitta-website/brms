@@ -181,15 +181,31 @@ export function useUpdateBankStatementTransaction() {
         return; // No updates to make
       }
 
-      const { error } = await supabase
+      // `.select()` is required here: without it PostgREST reports success even when
+      // the filter matches zero rows (stale id, or the row is hidden by RLS), which
+      // silently swallowed every failed save.
+      const { data, error } = await supabase
         .from("bank_statement_transactions")
         .update(updates)
-        .eq("id", transactionId);
+        .eq("id", transactionId)
+        .select("id");
 
       if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error(
+          "No transaction was updated. The record may no longer exist, or you may not have permission to edit it."
+        );
+      }
     },
     onSuccess: (_, variables) => {
+      // The Transactions page reads the all-statements view from a *different* key
+      // ("bank-statement-transactions-all"). React Query matches query keys element by
+      // element, so invalidating "bank-statement-transactions" alone never refreshed it
+      // and saved categories appeared to vanish.
       queryClient.invalidateQueries({ queryKey: ["bank-statement-transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["bank-statement-transactions-all"] });
+      queryClient.invalidateQueries({ queryKey: ["category-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       if (variables.proof !== undefined) {
         toast({
           title: "Proof updated",

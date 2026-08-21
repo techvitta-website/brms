@@ -262,8 +262,6 @@ const Users = () => {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      if (error) throw error;
-
       toast({
         title: "Password updated",
         description: `Password updated for ${resetTargetUser.email}`,
