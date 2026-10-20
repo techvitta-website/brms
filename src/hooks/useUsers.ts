@@ -204,27 +204,19 @@ export function useUpdateUserRoles() {
       userId: string;
       roles: string[];
     }) => {
-      // Remove all existing roles
-      const { error: deleteError } = await supabase
-        .from("user_roles")
-        .delete()
-        .eq("user_id", userId);
+      // Apply the whole role set in one transaction.
+      //
+      // The previous DELETE-then-INSERT was not atomic: an admin editing their own
+      // roles passed the DELETE, lost their admin row, and was then denied on the
+      // INSERT by the `is_admin(auth.uid())` RLS policy -- leaving them with no roles
+      // at all. set_user_roles() does both steps server-side and also refuses to
+      // remove the last admin.
+      const { error } = await supabase.rpc("set_user_roles" as any, {
+        _user_id: userId,
+        _roles: roles,
+      } as any);
 
-      if (deleteError) throw deleteError;
-
-      // Add new roles
-      if (roles.length > 0) {
-        const roleInserts = roles.map((role) => ({
-          user_id: userId,
-          role: role as any,
-        }));
-
-        const { error: insertError } = await supabase
-          .from("user_roles")
-          .insert(roleInserts);
-
-        if (insertError) throw insertError;
-      }
+      if (error) throw error;
 
       return { userId, roles };
     },
